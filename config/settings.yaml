@@ -1,0 +1,23 @@
+llm:
+  model: "gemini-2.5-flash"
+  temperature: 0
+
+scanner:
+  thresholds:
+    panic_sell:
+      min_drop_pct: 5
+      max_rsi: 30
+      max_sector_drop_pct: 2
+    short_squeeze:
+      min_short_interest: 20
+      min_days_to_cover: 5
+      min_price_change_5d: 3
+      min_volume_ratio: 2.0
+    breakout:
+      min_volume_ratio: 1.5
+      rsi_range: [50, 70]
+
+  position_sizing:
+    portfolio_value: 100000
+    max_risk_per_trade_pct: 2
+    max_positions: 10
