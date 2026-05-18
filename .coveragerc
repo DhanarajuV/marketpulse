@@ -1,0 +1,5 @@
+[run]
+omit =
+    src/api/*
+    src/scheduler.py
+    src/scanner/run_scan.py
