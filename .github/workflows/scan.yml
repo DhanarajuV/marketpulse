@@ -2,10 +2,8 @@ name: Market Scan
 
 on:
   schedule:
-    # 8AM EST = 12:00 UTC (Mon-Fri)
-    - cron: '0 12 * * 1-5'
-    # 1PM EST = 17:00 UTC (Mon-Fri)
-    - cron: '0 17 * * 1-5'
+    - cron: '37 10 * * 1-5'
+    - cron: '37 15 * * 1-5'
   workflow_dispatch:  # Allow manual trigger from GitHub UI
 
 jobs:
