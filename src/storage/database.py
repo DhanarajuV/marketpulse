@@ -65,6 +65,7 @@ def save_signal(signal: dict):
 
     time_stop = (datetime.now() + timedelta(days=signal["time_stop_days"])).isoformat()
     created_at = datetime.now().isoformat()
+    ttl_expire = int((datetime.now() + timedelta(days=365)).timestamp())
 
     item = {
         "signal_id": str(uuid.uuid4()),
@@ -83,6 +84,7 @@ def save_signal(signal: dict):
         "reasoning": signal["reasoning"],
         "sector": signal["sector"],
         "created_at": created_at,
+        "ttl": ttl_expire,
     }
 
     # Remove None values (DynamoDB doesn't accept None)
