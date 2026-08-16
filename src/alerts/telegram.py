@@ -64,9 +64,6 @@ def format_no_signals() -> str:
 
 
 def send_scan_results(signals: list[dict]):
-    """Send all signals (or no-signal summary) via Telegram."""
-    if signals:
-        for signal in signals:
-            send_alert(format_signal(signal))
-    else:
-        send_alert(format_no_signals())
+    """Send all signals via Telegram. Silent if nothing to report."""
+    for signal in signals:
+        send_alert(format_signal(signal))

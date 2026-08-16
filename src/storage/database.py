@@ -36,6 +36,19 @@ def _from_decimal(item: dict) -> dict:
     return result
 
 
+def _paginated_scan(**kwargs) -> list[dict]:
+    """Execute a DynamoDB scan with automatic pagination."""
+    items = []
+    while True:
+        response = signals_table.scan(**kwargs)
+        items.extend(response.get("Items", []))
+        # Check if there are more pages
+        if "LastEvaluatedKey" not in response:
+            break
+        kwargs["ExclusiveStartKey"] = response["LastEvaluatedKey"]
+    return items
+
+
 def has_active_signal(ticker: str) -> bool:
     """Check if there's already an active signal for this ticker."""
     response = signals_table.scan(
@@ -65,6 +78,8 @@ def save_signal(signal: dict):
         "target_3": _to_decimal(signal.get("target_3")),
         "time_stop_date": time_stop,
         "status": "active",
+        "target_1_hit": False,
+        "target_2_hit": False,
         "reasoning": signal["reasoning"],
         "sector": signal["sector"],
         "created_at": created_at,
@@ -78,11 +93,21 @@ def save_signal(signal: dict):
 
 
 def get_active_signals() -> list[dict]:
-    """Get all active (open) signals."""
-    response = signals_table.scan(
+    """Get all active (open) signals with pagination."""
+    items = _paginated_scan(
         FilterExpression=Attr("status").eq("active")
     )
-    return [_from_decimal(item) for item in response.get("Items", [])]
+    return [_from_decimal(item) for item in items]
+
+
+def mark_target_hit(signal_id: str, target: int):
+    """Mark a target as hit so we don't alert again."""
+    field = f"target_{target}_hit"
+    signals_table.update_item(
+        Key={"signal_id": signal_id},
+        UpdateExpression=f"SET {field} = :val",
+        ExpressionAttributeValues={":val": True},
+    )
 
 
 def close_signal(signal_id: str, close_price: float, status: str):
@@ -111,12 +136,10 @@ def close_signal(signal_id: str, close_price: float, status: str):
 
 
 def get_signal_stats() -> dict:
-    """Get win/loss statistics."""
-    # Scan for all closed signals
-    response = signals_table.scan(
+    """Get win/loss statistics with pagination."""
+    items = _paginated_scan(
         FilterExpression=Attr("status").ne("active")
     )
-    items = response.get("Items", [])
 
     total = len(items)
     wins = sum(1 for i in items if i.get("status") == "closed_win")
@@ -131,12 +154,11 @@ def get_signal_stats() -> dict:
 
 
 def get_signal_history(days: int = 30) -> list[dict]:
-    """Get closed signals from the last N days."""
+    """Get closed signals from the last N days with pagination."""
     cutoff = (datetime.now() - timedelta(days=days)).isoformat()
 
-    response = signals_table.scan(
+    items = _paginated_scan(
         FilterExpression=Attr("status").ne("active") & Attr("created_at").gte(cutoff)
     )
-    items = response.get("Items", [])
     items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
     return [_from_decimal(item) for item in items]

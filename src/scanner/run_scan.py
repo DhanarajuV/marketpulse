@@ -44,7 +44,7 @@ def run_full_scan():
     print("\n📋 Checking active positions...")
     active = get_active_signals()
     print(f"  Active positions: {len(active)}")
-    sell_alerts = check_active_positions(all_indicators)
+    sell_alerts = check_active_positions(all_indicators, active)
     if sell_alerts:
         print(f"  ⚡ {len(sell_alerts)} position alert(s) triggered")
 
