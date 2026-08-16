@@ -1,6 +1,7 @@
 import os
+from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from tavily import TavilyClient
+import finnhub
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage
 from src.core.universe import SECTORS, get_sector_for_ticker
@@ -8,20 +9,37 @@ from src.core.config import config
 
 load_dotenv()
 
-_tavily = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
+_finnhub_client = finnhub.Client(api_key=os.getenv("FINNHUB_API_KEY"))
+
+
+def _get_company_news(ticker: str) -> list[dict]:
+    """Get recent news for a specific ticker from Finnhub."""
+    today = datetime.now().strftime("%Y-%m-%d")
+    yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+    try:
+        news = _finnhub_client.company_news(ticker, _from=yesterday, to=today)
+        return news[:5]  # Top 5 articles per ticker
+    except Exception:
+        return []
 
 
 def _search_sector_news(sector_name: str, stocks: list[str]) -> str:
-    """Search for recent news about a sector."""
-    query = f"{sector_name} stocks market news {' '.join(stocks[:3])}"
-    try:
-        response = _tavily.search(query, max_results=3, days=1)
-        results = response.get("results", [])
-        if not results:
-            return ""
-        return "\n".join(f"- {r['title']}: {r['content'][:200]}" for r in results)
-    except Exception:
+    """Get recent news for key stocks in a sector via Finnhub."""
+    all_news = []
+
+    # Check top 3 stocks in the sector for news
+    for ticker in stocks[:3]:
+        articles = _get_company_news(ticker)
+        for article in articles:
+            headline = article.get("headline", "")
+            summary = article.get("summary", "")[:200]
+            if headline:
+                all_news.append(f"- [{ticker}] {headline}: {summary}")
+
+    if not all_news:
         return ""
+
+    return "\n".join(all_news[:10])  # Cap at 10 articles per sector
 
 
 def _classify_news(news_text: str, sector: str) -> dict | None:

@@ -12,10 +12,10 @@ Parameters:
     NoEcho: true
     Description: Google Gemini API key
 
-  TavilyApiKey:
+  FinnhubApiKey:
     Type: String
     NoEcho: true
-    Description: Tavily API key for news search
+    Description: Finnhub API key for market news
 
   TelegramBotToken:
     Type: String
@@ -172,8 +172,8 @@ Resources:
               Value: !Ref SignalsTable
             - Name: GOOGLE_API_KEY
               Value: !Ref GoogleApiKey
-            - Name: TAVILY_API_KEY
-              Value: !Ref TavilyApiKey
+            - Name: FINNHUB_API_KEY
+              Value: !Ref FinnhubApiKey
             - Name: TELEGRAM_BOT_TOKEN
               Value: !Ref TelegramBotToken
             - Name: TELEGRAM_CHAT_ID

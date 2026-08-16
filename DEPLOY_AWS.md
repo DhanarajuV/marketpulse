@@ -21,7 +21,7 @@ Container shuts down (you stop paying)
 
 - AWS account
 - GitHub repo with this code pushed
-- API keys ready: Google Gemini, Tavily, Telegram Bot Token + Chat ID
+- API keys ready: Google Gemini, Finnhub, Telegram Bot Token + Chat ID
 
 ---
 
@@ -50,7 +50,7 @@ This creates: DynamoDB table, ECR repo, ECS cluster, task definition, EventBridg
 |-----------|-------|
 | EnvironmentName | `marketpulse` (or leave default) |
 | GoogleApiKey | Your Gemini API key |
-| TavilyApiKey | Your Tavily API key |
+| FinnhubApiKey | Your Finnhub API key |
 | TelegramBotToken | Your bot token from @BotFather |
 | TelegramChatId | Your chat ID |
 | MarketPulseApiKey | Any random string (or leave empty) |
