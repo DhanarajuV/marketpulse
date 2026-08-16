@@ -1,6 +1,7 @@
 annotated-doc==0.0.4
 annotated-types==0.7.0
 anyio==4.13.0
+boto3==1.38.0
 APScheduler==3.11.2
 beautifulsoup4==4.14.3
 certifi==2026.4.22
@@ -44,7 +45,6 @@ pydantic_core==2.46.4
 Pygments==2.20.0
 python-dateutil==2.9.0.post0
 python-dotenv==1.2.2
-python-jose==3.5.0
 pytz==2026.2
 PyYAML==6.0.3
 regex==2026.5.9

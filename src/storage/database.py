@@ -1,106 +1,113 @@
-import sqlite3
+"""DynamoDB storage for MarketPulse signals and positions."""
 import os
+import uuid
 from datetime import datetime, timedelta
+from decimal import Decimal
 
-DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", "marketpulse.db")
-os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+import boto3
+from boto3.dynamodb.conditions import Key, Attr
+
+# DynamoDB config
+AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
+SIGNALS_TABLE = os.getenv("DYNAMODB_SIGNALS_TABLE", "marketpulse-signals")
+
+# Initialize DynamoDB resource
+dynamodb = boto3.resource("dynamodb", region_name=AWS_REGION)
+signals_table = dynamodb.Table(SIGNALS_TABLE)
 
 
-def get_conn():
-    conn = sqlite3.connect(DB_PATH)
-    conn.row_factory = sqlite3.Row
-    return conn
+def _to_decimal(value):
+    """Convert float to Decimal for DynamoDB."""
+    if value is None:
+        return None
+    return Decimal(str(value))
 
 
-def init_db():
-    """Create tables if they don't exist."""
-    conn = get_conn()
-    conn.executescript("""
-        CREATE TABLE IF NOT EXISTS signals (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            ticker TEXT NOT NULL,
-            signal_type TEXT NOT NULL,
-            conviction TEXT NOT NULL,
-            entry_price REAL NOT NULL,
-            stop_loss REAL NOT NULL,
-            target_1 REAL NOT NULL,
-            target_2 REAL,
-            target_3 REAL,
-            time_stop_date TEXT NOT NULL,
-            status TEXT DEFAULT 'active',
-            close_price REAL,
-            close_date TEXT,
-            return_pct REAL,
-            reasoning TEXT,
-            sector TEXT,
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS users (
-            email TEXT PRIMARY KEY,
-            name TEXT,
-            role TEXT DEFAULT 'user',
-            created_at TEXT DEFAULT CURRENT_TIMESTAMP
-        );
-
-        CREATE TABLE IF NOT EXISTS scan_logs (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            scan_time TEXT DEFAULT CURRENT_TIMESTAMP,
-            signals_found INTEGER,
-            duration_seconds REAL
-        );
-    """)
-    conn.commit()
-    conn.close()
+def _from_decimal(item: dict) -> dict:
+    """Convert Decimal values back to float for API responses."""
+    result = {}
+    for key, value in item.items():
+        if isinstance(value, Decimal):
+            result[key] = float(value)
+        elif isinstance(value, list):
+            result[key] = [float(v) if isinstance(v, Decimal) else v for v in value]
+        else:
+            result[key] = value
+    return result
 
 
 def save_signal(signal: dict):
-    """Save a new signal to the database."""
-    conn = get_conn()
+    """Save a new signal to DynamoDB."""
     time_stop = (datetime.now() + timedelta(days=signal["time_stop_days"])).isoformat()
-    conn.execute("""
-        INSERT INTO signals (ticker, signal_type, conviction, entry_price, stop_loss,
-                            target_1, target_2, target_3, time_stop_date, reasoning, sector)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (
-        signal["ticker"], signal["signal_type"], signal["conviction"],
-        signal["entry_price"], signal["stop_loss"],
-        signal["target_1"], signal.get("target_2"), signal.get("target_3"),
-        time_stop, str(signal["reasoning"]), signal["sector"],
-    ))
-    conn.commit()
-    conn.close()
+    created_at = datetime.now().isoformat()
+
+    item = {
+        "signal_id": str(uuid.uuid4()),
+        "ticker": signal["ticker"],
+        "signal_type": signal["signal_type"],
+        "conviction": signal["conviction"],
+        "entry_price": _to_decimal(signal["entry_price"]),
+        "stop_loss": _to_decimal(signal["stop_loss"]),
+        "target_1": _to_decimal(signal["target_1"]),
+        "target_2": _to_decimal(signal.get("target_2")),
+        "target_3": _to_decimal(signal.get("target_3")),
+        "time_stop_date": time_stop,
+        "status": "active",
+        "reasoning": signal["reasoning"],
+        "sector": signal["sector"],
+        "created_at": created_at,
+    }
+
+    # Remove None values (DynamoDB doesn't accept None)
+    item = {k: v for k, v in item.items() if v is not None}
+
+    signals_table.put_item(Item=item)
 
 
 def get_active_signals() -> list[dict]:
     """Get all active (open) signals."""
-    conn = get_conn()
-    rows = conn.execute("SELECT * FROM signals WHERE status = 'active'").fetchall()
-    conn.close()
-    return [dict(r) for r in rows]
+    response = signals_table.scan(
+        FilterExpression=Attr("status").eq("active")
+    )
+    return [_from_decimal(item) for item in response.get("Items", [])]
 
 
-def close_signal(signal_id: int, close_price: float, status: str):
+def close_signal(signal_id: str, close_price: float, status: str):
     """Close a signal (win, loss, or timeout)."""
-    conn = get_conn()
-    row = conn.execute("SELECT entry_price FROM signals WHERE id = ?", (signal_id,)).fetchone()
-    if row:
-        return_pct = (close_price / row["entry_price"] - 1) * 100
-        conn.execute("""
-            UPDATE signals SET status = ?, close_price = ?, close_date = ?, return_pct = ?
-            WHERE id = ?
-        """, (status, close_price, datetime.now().isoformat(), return_pct, signal_id))
-        conn.commit()
-    conn.close()
+    # Get the signal to calculate return
+    response = signals_table.get_item(Key={"signal_id": signal_id})
+    item = response.get("Item")
+
+    if not item:
+        return
+
+    entry_price = float(item["entry_price"])
+    return_pct = (close_price / entry_price - 1) * 100
+
+    signals_table.update_item(
+        Key={"signal_id": signal_id},
+        UpdateExpression="SET #s = :status, close_price = :cp, close_date = :cd, return_pct = :rp",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={
+            ":status": status,
+            ":cp": _to_decimal(close_price),
+            ":cd": datetime.now().isoformat(),
+            ":rp": _to_decimal(return_pct),
+        },
+    )
 
 
 def get_signal_stats() -> dict:
     """Get win/loss statistics."""
-    conn = get_conn()
-    total = conn.execute("SELECT COUNT(*) FROM signals WHERE status != 'active'").fetchone()[0]
-    wins = conn.execute("SELECT COUNT(*) FROM signals WHERE status = 'closed_win'").fetchone()[0]
-    losses = conn.execute("SELECT COUNT(*) FROM signals WHERE status = 'closed_loss'").fetchone()[0]
-    conn.close()
+    # Scan for all closed signals
+    response = signals_table.scan(
+        FilterExpression=Attr("status").ne("active")
+    )
+    items = response.get("Items", [])
+
+    total = len(items)
+    wins = sum(1 for i in items if i.get("status") == "closed_win")
+    losses = sum(1 for i in items if i.get("status") == "closed_loss")
 
     return {
         "total_closed": total,
@@ -110,5 +117,13 @@ def get_signal_stats() -> dict:
     }
 
 
-# Initialize on import
-init_db()
+def get_signal_history(days: int = 30) -> list[dict]:
+    """Get closed signals from the last N days."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+
+    response = signals_table.scan(
+        FilterExpression=Attr("status").ne("active") & Attr("created_at").gte(cutoff)
+    )
+    items = response.get("Items", [])
+    items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+    return [_from_decimal(item) for item in items]

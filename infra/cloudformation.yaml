@@ -1,0 +1,289 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: MarketPulse - ECS Fargate + DynamoDB infrastructure
+
+Parameters:
+  EnvironmentName:
+    Type: String
+    Default: marketpulse
+    Description: Name prefix for all resources
+
+  GoogleApiKey:
+    Type: String
+    NoEcho: true
+    Description: Google Gemini API key
+
+  TavilyApiKey:
+    Type: String
+    NoEcho: true
+    Description: Tavily API key for news search
+
+  TelegramBotToken:
+    Type: String
+    NoEcho: true
+    Description: Telegram bot token
+
+  TelegramChatId:
+    Type: String
+    Description: Telegram chat ID for alerts
+
+  MarketPulseApiKey:
+    Type: String
+    NoEcho: true
+    Default: ''
+    Description: Optional API key for the REST API
+
+  VpcId:
+    Type: AWS::EC2::VPC::Id
+    Description: VPC to run tasks in (use default VPC)
+
+  SubnetId:
+    Type: AWS::EC2::Subnet::Id
+    Description: Public subnet for Fargate tasks (needs internet access)
+
+Resources:
+
+  # --- DynamoDB Table ---
+  SignalsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub '${EnvironmentName}-signals'
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: signal_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: signal_id
+          KeyType: HASH
+      Tags:
+        - Key: Project
+          Value: !Ref EnvironmentName
+
+  # --- ECR Repository ---
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref EnvironmentName
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {
+            "rules": [
+              {
+                "rulePriority": 1,
+                "description": "Keep only last 5 images",
+                "selection": {
+                  "tagStatus": "any",
+                  "countType": "imageCountMoreThan",
+                  "countNumber": 5
+                },
+                "action": {
+                  "type": "expire"
+                }
+              }
+            ]
+          }
+
+  # --- VPC (using default VPC) ---
+  # We'll use the default VPC and subnets for simplicity
+
+  # --- ECS Cluster ---
+  ECSCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref EnvironmentName
+      CapacityProviders:
+        - FARGATE
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE
+          Weight: 1
+
+  # --- CloudWatch Log Group ---
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub '/ecs/${EnvironmentName}'
+      RetentionInDays: 30
+
+  # --- IAM Role for ECS Task Execution ---
+  TaskExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-execution-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy
+
+  # --- IAM Role for ECS Task (app permissions) ---
+  TaskRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-task-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: DynamoDBAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:UpdateItem
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                Resource: !GetAtt SignalsTable.Arn
+
+  # --- ECS Task Definition ---
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family: !Sub '${EnvironmentName}-scan'
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: '256'
+      Memory: '512'
+      ExecutionRoleArn: !GetAtt TaskExecutionRole.Arn
+      TaskRoleArn: !GetAtt TaskRole.Arn
+      ContainerDefinitions:
+        - Name: !Ref EnvironmentName
+          Image: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentName}:latest'
+          Essential: true
+          Environment:
+            - Name: AWS_REGION
+              Value: !Ref AWS::Region
+            - Name: DYNAMODB_SIGNALS_TABLE
+              Value: !Ref SignalsTable
+            - Name: GOOGLE_API_KEY
+              Value: !Ref GoogleApiKey
+            - Name: TAVILY_API_KEY
+              Value: !Ref TavilyApiKey
+            - Name: TELEGRAM_BOT_TOKEN
+              Value: !Ref TelegramBotToken
+            - Name: TELEGRAM_CHAT_ID
+              Value: !Ref TelegramChatId
+            - Name: MARKETPULSE_API_KEY
+              Value: !Ref MarketPulseApiKey
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group: !Ref LogGroup
+              awslogs-region: !Ref AWS::Region
+              awslogs-stream-prefix: scan
+
+  # --- EventBridge Rule: Morning Scan (8AM EST = 12:00 UTC) ---
+  MorningScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${EnvironmentName}-morning-scan'
+      Description: Trigger morning market scan at 8AM EST (Mon-Fri)
+      ScheduleExpression: 'cron(0 12 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Id: MorningScanTarget
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref TaskDefinition
+            TaskCount: 1
+            LaunchType: FARGATE
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                Subnets:
+                  - !Ref SubnetId
+                SecurityGroups:
+                  - !Ref SecurityGroup
+
+  # --- EventBridge Rule: Afternoon Scan (1PM EST = 17:00 UTC) ---
+  AfternoonScanRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub '${EnvironmentName}-afternoon-scan'
+      Description: Trigger afternoon market scan at 1PM EST (Mon-Fri)
+      ScheduleExpression: 'cron(0 17 ? * MON-FRI *)'
+      State: ENABLED
+      Targets:
+        - Id: AfternoonScanTarget
+          Arn: !GetAtt ECSCluster.Arn
+          RoleArn: !GetAtt EventBridgeRole.Arn
+          EcsParameters:
+            TaskDefinitionArn: !Ref TaskDefinition
+            TaskCount: 1
+            LaunchType: FARGATE
+            NetworkConfiguration:
+              AwsVpcConfiguration:
+                AssignPublicIp: ENABLED
+                Subnets:
+                  - !Ref SubnetId
+                SecurityGroups:
+                  - !Ref SecurityGroup
+
+  # --- IAM Role for EventBridge to trigger ECS ---
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${EnvironmentName}-eventbridge-role'
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: RunECSTask
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecs:RunTask
+                Resource: !Ref TaskDefinition
+              - Effect: Allow
+                Action:
+                  - iam:PassRole
+                Resource:
+                  - !GetAtt TaskExecutionRole.Arn
+                  - !GetAtt TaskRole.Arn
+
+  # --- Security Group (outbound only — no inbound needed for scan tasks) ---
+  SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${EnvironmentName}-sg'
+      GroupDescription: Allow outbound traffic for MarketPulse scan tasks
+      VpcId: !Ref VpcId
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+
+Outputs:
+  ECRRepositoryUri:
+    Description: ECR repository URI for pushing Docker images
+    Value: !Sub '${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${EnvironmentName}'
+
+  ClusterName:
+    Description: ECS Cluster name
+    Value: !Ref ECSCluster
+
+  SignalsTableName:
+    Description: DynamoDB signals table name
+    Value: !Ref SignalsTable
+
+  TaskDefinitionArn:
+    Description: Task definition ARN (for manual runs)
+    Value: !Ref TaskDefinition

@@ -19,7 +19,7 @@ def check_active_positions(all_indicators: dict) -> list[dict]:
 
         # Check stop-loss
         if current_price <= signal["stop_loss"]:
-            close_signal(signal["id"], current_price, "closed_loss")
+            close_signal(signal["signal_id"], current_price, "closed_loss")
             alert = {
                 "ticker": ticker,
                 "reason": "Stop-loss hit",
@@ -49,7 +49,7 @@ def check_active_positions(all_indicators: dict) -> list[dict]:
 
         # Check target 3 (full exit)
         if signal["target_3"] and current_price >= signal["target_3"]:
-            close_signal(signal["id"], current_price, "closed_win")
+            close_signal(signal["signal_id"], current_price, "closed_win")
             msg = f"🔴 *TARGET 3 HIT* — {ticker}\n\nPrice: ${current_price:.2f}\nEntry: ${entry:.2f}\nGain: +{return_pct:.1f}%\n\n*ACTION: Exit remaining position* 🎉"
             send_alert(msg)
 
@@ -57,7 +57,7 @@ def check_active_positions(all_indicators: dict) -> list[dict]:
         if signal["time_stop_date"]:
             time_stop = datetime.fromisoformat(signal["time_stop_date"])
             if datetime.now() > time_stop:
-                close_signal(signal["id"], current_price, "closed_timeout")
+                close_signal(signal["signal_id"], current_price, "closed_timeout")
                 alert = {
                     "ticker": ticker,
                     "reason": "Time stop reached",
