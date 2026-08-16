@@ -83,27 +83,31 @@ def run_full_scan():
     all_signals = filter_signals_by_fundamentals(all_signals)
 
     # Step 7: Save to DB and output
+    new_signals = []
     if all_signals:
-        print(f"\n🔥 {len(all_signals)} NEW SIGNAL(S) FOUND:")
+        print(f"\n🔥 {len(all_signals)} SIGNAL(S) DETECTED:")
         for s in all_signals:
-            save_signal(s)
-            print(f"\n  {'='*50}")
-            print(f"  {s['signal_type'].upper()} — {s['ticker']} at ${s['entry_price']}")
-            print(f"  Conviction: {s['conviction']} | Sector: {s['sector']}")
-            print(f"  Reasoning:")
-            for r in s['reasoning']:
-                print(f"    • {r}")
-            print(f"  Stop: ${s['stop_loss']} | T1: ${s['target_1']} | T2: ${s['target_2']} | T3: ${s['target_3']}")
+            saved = save_signal(s)
+            if saved:
+                new_signals.append(s)
+                print(f"\n  {'='*50}")
+                print(f"  {s['signal_type'].upper()} — {s['ticker']} at ${s['entry_price']}")
+                print(f"  Conviction: {s['conviction']} | Sector: {s['sector']}")
+                print(f"  Reasoning:")
+                for r in s['reasoning']:
+                    print(f"    • {r}")
+                print(f"  Stop: ${s['stop_loss']} | T1: ${s['target_1']} | T2: ${s['target_2']} | T3: ${s['target_3']}")
     else:
         print("\n✅ No new actionable signals detected.")
 
-    # Step 8: Send Telegram alerts
+    # Step 8: Send Telegram alerts (only for newly saved signals)
     print("\n📱 Sending alerts...")
-    send_scan_results(all_signals)
+    send_scan_results(new_signals)
 
     duration = time.time() - start
     print(f"\n⏱️ Scan completed in {duration:.1f} seconds")
-    return all_signals
+    print(f"  Signals detected: {len(all_signals)} | New (saved): {len(new_signals)}")
+    return new_signals
 
 
 if __name__ == "__main__":

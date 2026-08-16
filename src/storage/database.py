@@ -36,8 +36,20 @@ def _from_decimal(item: dict) -> dict:
     return result
 
 
+def has_active_signal(ticker: str) -> bool:
+    """Check if there's already an active signal for this ticker."""
+    response = signals_table.scan(
+        FilterExpression=Attr("ticker").eq(ticker) & Attr("status").eq("active")
+    )
+    return len(response.get("Items", [])) > 0
+
+
 def save_signal(signal: dict):
-    """Save a new signal to DynamoDB."""
+    """Save a new signal to DynamoDB. Skips if ticker already has an active signal."""
+    if has_active_signal(signal["ticker"]):
+        print(f"  ⏭️ Skipping {signal['ticker']} — active signal already exists")
+        return False
+
     time_stop = (datetime.now() + timedelta(days=signal["time_stop_days"])).isoformat()
     created_at = datetime.now().isoformat()
 
@@ -62,6 +74,7 @@ def save_signal(signal: dict):
     item = {k: v for k, v in item.items() if v is not None}
 
     signals_table.put_item(Item=item)
+    return True
 
 
 def get_active_signals() -> list[dict]:
