@@ -14,8 +14,8 @@ scanner:
       min_price_change_5d: 3
       min_volume_ratio: 2.0
     breakout:
-      min_volume_ratio: 1.5
-      rsi_range: [50, 70]
+      min_volume_ratio: 2.0
+      rsi_range: [55, 70]
 
   position_sizing:
     portfolio_value: 100000
